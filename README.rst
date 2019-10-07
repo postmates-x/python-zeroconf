@@ -132,6 +132,11 @@ See examples directory for more.
 Changelog
 =========
 
+0.23.0-PMX Fork
+---
+* Re-using the same socket as the listener for sending all outbound multicast traffic to avoid having respond_only sockets that build up Recv-Q that don't get serviced
+* Disabled the short circuit of the servicebrowser delay when it has records that have gone stale
+
 0.23.0
 ------
 

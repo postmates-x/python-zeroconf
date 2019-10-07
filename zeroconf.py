@@ -40,7 +40,7 @@ from typing import Any, Callable, Set, Tuple  # noqa # used in type hints
 import ifaddr
 
 __author__ = 'Paul Scott-Murphy, William McBrine'
-__maintainer__ = 'Jakub Stasiak <jakub@stasiak.at>'
+__maintainer__ = 'PMX <infra@postmatesx>'
 __version__ = '0.23.0'
 __license__ = 'LGPL'
 
@@ -1223,6 +1223,10 @@ class Listener(QuietLogger):
             pass
 
         elif msg.is_query():
+            #TODO: Add throttling for query responses or per the RFC, short-circuit
+            #if another node already responded with the the services we would respond
+            #to.
+
             # Always multicast responses
             if port == _MDNS_PORT:
                 self.zc.handle_query(msg, None, _MDNS_PORT)
@@ -1402,8 +1406,12 @@ class ServiceBrowser(RecordUpdateListener, threading.Thread):
                     return
 
             expires = record.get_expiration_time(75)
-            if expires < self.next_time:
-                self.next_time = expires
+        # The expires code below causes whatever record
+        # has the shortest TTL to set the frequency of the
+        # browser instead of the delay parameter.
+
+        #   if expires < self.next_time:
+        #       self.next_time = expires
 
         elif record.type == _TYPE_TXT and record.name == self.type:
             assert isinstance(record, DNSText)
@@ -1434,8 +1442,12 @@ class ServiceBrowser(RecordUpdateListener, threading.Thread):
                         out.add_answer_at_time(record, now)
 
                 self.zc.send(out, addr=self.addr, port=self.port)
+                # next_time will get reset to the shortest time in 
+                # which a service might expire
                 self.next_time = now + self.delay
-                self.delay = min(_BROWSER_BACKOFF_LIMIT * 1000, self.delay * 2)
+                
+                #This appears broken. A long delay is overridden by BROWSER_BACKOFF_LIMIT
+                #self.delay = min(_BROWSER_BACKOFF_LIMIT * 1000, self.delay * 2)
 
             if len(self._handlers_to_call) > 0 and not self.zc.done:
                 handler = self._handlers_to_call.pop(0)
@@ -1927,14 +1939,12 @@ def add_multicast_member(listen_socket, interface):
         else:
             raise
 
-    respond_socket = new_socket(ip_version=(IPVersion.V6Only if is_v6 else IPVersion.V4Only))
-    log.debug('Configuring %s with multicast interface %s', respond_socket, interface)
+    log.debug('Preparing options for multicast send to interface %s', interface)
     if is_v6:
-        respond_socket.setsockopt(_IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, iface_bin)
+        respond_socket_option={"IPProto": _IPPROTO_IPV6, "SocketOpt": socket.IPV6_MULTICAST_IF, "SocketOptValue": iface_bin}
     else:
-        respond_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(interface))
-    return respond_socket
-
+        respond_socket_option={"IPProto": socket.IPPROTO_IP, "SocketOpt": socket.IP_MULTICAST_IF, "SocketOptValue": socket.inet_aton(interface)}
+    return respond_socket_option
 
 def create_sockets(
     interfaces: Union[List[Union[str, int]], InterfaceChoice] = InterfaceChoice.All,
@@ -1949,17 +1959,22 @@ def create_sockets(
     interfaces = normalize_interface_choice(interfaces, ip_version)
 
     respond_sockets = []
+    respond_socket_options = []
 
     for i in interfaces:
+        respond_socket = None
+        respond_socket_optopn = None
         if not unicast:
-            respond_socket = add_multicast_member(listen_socket, i)
+            respond_socket_option = add_multicast_member(listen_socket, i)
         else:
             respond_socket = new_socket(port=0, ip_version=ip_version)
 
         if respond_socket is not None:
             respond_sockets.append(respond_socket)
+        if respond_socket_option is not None:
+            respond_socket_options.append(respond_socket_option)
 
-    return listen_socket, respond_sockets
+    return listen_socket, respond_sockets, respond_socket_options
 
 
 def get_errno(e: Exception) -> int:
@@ -2018,7 +2033,7 @@ class Zeroconf(QuietLogger):
         self._GLOBAL_DONE = False
         self.unicast = unicast
 
-        self._listen_socket, self._respond_sockets = create_sockets(interfaces, unicast, ip_version)
+        self._listen_socket , self._respond_sockets, self._respond_socket_options = create_sockets(interfaces, unicast, ip_version)
 
         self.listeners = []  # type: List[RecordUpdateListener]
         self.browsers = {}  # type: Dict[ServiceListener, ServiceBrowser]
@@ -2441,6 +2456,31 @@ class Zeroconf(QuietLogger):
             out.id = msg.id
             self.send(out, addr, port)
 
+    def send_via_configured_socket(self, s, out: DNSOutgoing, addr: Optional[str] = None, port: int = _MDNS_PORT) -> None:
+        try:
+            if addr is None:
+                real_addr = _MDNS_ADDR6 if s.family == socket.AF_INET6 else _MDNS_ADDR
+            elif not can_send_to(s, addr):
+                return
+            else:
+                real_addr = addr
+            bytes_sent = s.sendto(packet, 0, (real_addr, port))
+        except Exception as exc:  # TODO stop catching all Exceptions
+            if (
+                isinstance(exc, OSError)
+                and exc.errno == errno.ENETUNREACH
+                and s.family == socket.AF_INET6
+            ):
+                # with IPv6 we don't have a reliable way to determine if an interface actually has IPv6
+                # support, so we have to try and ignore errors.
+                return
+            # on send errors, log the exception and keep going
+            self.log_exception_warning()
+        else:
+            if bytes_sent != len(packet):
+                self.log_warning_once('!!! sent %d out of %d bytes to %r' % (bytes_sent, len(packet), s))
+
+    
     def send(self, out: DNSOutgoing, addr: Optional[str] = None, port: int = _MDNS_PORT) -> None:
         """Sends an outgoing packet."""
         packet = out.packet()
@@ -2448,31 +2488,20 @@ class Zeroconf(QuietLogger):
             self.log_warning_once("Dropping %r over-sized packet (%d bytes) %r", out, len(packet), packet)
             return
         log.debug('Sending %r (%d bytes) as %r...', out, len(packet), packet)
-        for s in self._respond_sockets:
+        s = self._listen_socket
+        
+        for so in self._respond_socket_options:
+            s.setsockopt(so["IPProto"],so["SocketOpt"],so["SocketOptValue"])
             if self._GLOBAL_DONE:
                 return
-            try:
-                if addr is None:
-                    real_addr = _MDNS_ADDR6 if s.family == socket.AF_INET6 else _MDNS_ADDR
-                elif not can_send_to(s, addr):
-                    continue
-                else:
-                    real_addr = addr
-                bytes_sent = s.sendto(packet, 0, (real_addr, port))
-            except Exception as exc:  # TODO stop catching all Exceptions
-                if (
-                    isinstance(exc, OSError)
-                    and exc.errno == errno.ENETUNREACH
-                    and s.family == socket.AF_INET6
-                ):
-                    # with IPv6 we don't have a reliable way to determine if an interface actually has IPv6
-                    # support, so we have to try and ignore errors.
-                    continue
-                # on send errors, log the exception and keep going
-                self.log_exception_warning()
-            else:
-                if bytes_sent != len(packet):
-                    self.log_warning_once('!!! sent %d out of %d bytes to %r' % (bytes_sent, len(packet), s))
+            self.send_via_configured_socket(s,out,addr,port)
+
+        for so in self._respond_sockets:
+            if self._GLOBAL_DONE:
+                return
+            self.send_via_configured_socket(s,out,addr,port)
+
+
 
     def close(self) -> None:
         """Ends the background threads, and prevent this instance from
