@@ -2456,7 +2456,7 @@ class Zeroconf(QuietLogger):
             out.id = msg.id
             self.send(out, addr, port)
 
-    def send_via_configured_socket(self, s, out: DNSOutgoing, addr: Optional[str] = None, port: int = _MDNS_PORT) -> None:
+    def send_via_configured_socket(self, s, packet, addr: Optional[str] = None, port: int = _MDNS_PORT) -> None:
         try:
             if addr is None:
                 real_addr = _MDNS_ADDR6 if s.family == socket.AF_INET6 else _MDNS_ADDR
@@ -2494,12 +2494,12 @@ class Zeroconf(QuietLogger):
             s.setsockopt(so["IPProto"],so["SocketOpt"],so["SocketOptValue"])
             if self._GLOBAL_DONE:
                 return
-            self.send_via_configured_socket(s,out,addr,port)
+            self.send_via_configured_socket(s,packet,addr,port)
 
         for so in self._respond_sockets:
             if self._GLOBAL_DONE:
                 return
-            self.send_via_configured_socket(s,out,addr,port)
+            self.send_via_configured_socket(s,packet,addr,port)
 
 
 
