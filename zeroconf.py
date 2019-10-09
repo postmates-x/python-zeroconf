@@ -1959,22 +1959,22 @@ def create_sockets(
     interfaces = normalize_interface_choice(interfaces, ip_version)
 
     respond_sockets = []
-    respond_socket_options = []
+    multicast_send_options = []
 
     for i in interfaces:
         respond_socket = None
-        respond_socket_optopn = None
+        multicast_socket_option = None
         if not unicast:
-            respond_socket_option = add_multicast_member(listen_socket, i)
+            multicast_socket_option = add_multicast_member(listen_socket, i)
         else:
             respond_socket = new_socket(port=0, ip_version=ip_version)
 
         if respond_socket is not None:
             respond_sockets.append(respond_socket)
-        if respond_socket_option is not None:
-            respond_socket_options.append(respond_socket_option)
+        if multicast_socket_option is not None:
+            multicast_send_options.append(multicast_socket_option)
 
-    return listen_socket, respond_sockets, respond_socket_options
+    return listen_socket, respond_sockets, multicast_send_options
 
 
 def get_errno(e: Exception) -> int:
@@ -2496,7 +2496,7 @@ class Zeroconf(QuietLogger):
                 return
             self.send_via_configured_socket(s,packet,addr,port)
 
-        for so in self._respond_sockets:
+        for s in self._respond_sockets:
             if self._GLOBAL_DONE:
                 return
             self.send_via_configured_socket(s,packet,addr,port)
