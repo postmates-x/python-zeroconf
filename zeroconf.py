@@ -1437,7 +1437,7 @@ class ServiceBrowser(RecordUpdateListener, threading.Thread):
             if self.next_time <= now:
                 out = DNSOutgoing(_FLAGS_QR_QUERY, multicast=self.multicast)
                 out.add_question(DNSQuestion(self.type, _TYPE_PTR, _CLASS_IN))
-                for record in self.services.values():
+                for record in list(self.services.values()):
                     if not record.is_stale(now):
                         out.add_answer_at_time(record, now)
 
@@ -2208,7 +2208,7 @@ class Zeroconf(QuietLogger):
                     now = current_time_millis()
                     continue
                 out = DNSOutgoing(_FLAGS_QR_RESPONSE | _FLAGS_AA)
-                for info in self.services.values():
+                for info in list(self.services.values()):
                     out.add_answer_at_time(DNSPointer(info.type, _TYPE_PTR, _CLASS_IN, 0, info.name), 0)
                     out.add_answer_at_time(
                         DNSService(
@@ -2345,7 +2345,7 @@ class Zeroconf(QuietLogger):
                                 "_services._dns-sd._udp.local.", _TYPE_PTR, _CLASS_IN, _DNS_OTHER_TTL, stype
                             ),
                         )
-                for service in self.services.values():
+                for service in list(self.services.values()):
                     if question.name == service.type:
                         if out is None:
                             out = DNSOutgoing(_FLAGS_QR_RESPONSE | _FLAGS_AA)
@@ -2394,7 +2394,7 @@ class Zeroconf(QuietLogger):
 
                     # Answer A record queries for any service addresses we know
                     if question.type in (_TYPE_A, _TYPE_ANY):
-                        for service in self.services.values():
+                        for service in list(self.services.values()):
                             if service.server == question.name.lower():
                                 for address in service.addresses:
                                     out.add_answer(
