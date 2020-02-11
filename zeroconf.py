@@ -1437,7 +1437,7 @@ class ServiceBrowser(RecordUpdateListener, threading.Thread):
             if self.next_time <= now:
                 out = DNSOutgoing(_FLAGS_QR_QUERY, multicast=self.multicast)
                 out.add_question(DNSQuestion(self.type, _TYPE_PTR, _CLASS_IN))
-                for record in list(self.services.values()):
+                for record in self.services.values():
                     if not record.is_stale(now):
                         out.add_answer_at_time(record, now)
 
@@ -2208,7 +2208,7 @@ class Zeroconf(QuietLogger):
                     now = current_time_millis()
                     continue
                 out = DNSOutgoing(_FLAGS_QR_RESPONSE | _FLAGS_AA)
-                for info in list(self.services.values()):
+                for info in self.services.values():
                     out.add_answer_at_time(DNSPointer(info.type, _TYPE_PTR, _CLASS_IN, 0, info.name), 0)
                     out.add_answer_at_time(
                         DNSService(
