@@ -91,7 +91,7 @@ _DNS_HOST_TTL = 120  # two minute for host records (A, SRV etc) as-per RFC6762
 _DNS_OTHER_TTL = 4500  # 75 minutes for non-host records (PTR, TXT etc) as-per RFC6762
 
 _MAX_MSG_TYPICAL = 1460  # unused
-_MAX_MSG_ABSOLUTE = 8966
+_MAX_MSG_ABSOLUTE = 17932
 
 _FLAGS_QR_MASK = 0x8000  # query response mask
 _FLAGS_QR_QUERY = 0x0000  # query
